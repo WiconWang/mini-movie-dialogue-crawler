@@ -1,0 +1,4 @@
+interface:
+  display_name: "台词采集器"
+  short_description: "从游戏 wiki 采集剧情台词，输出符合物料规范的 JSONL"
+  default_prompt: "帮我从 wiki 采集剧情台词并输出 JSONL"
