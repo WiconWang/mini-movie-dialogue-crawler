@@ -1,7 +1,7 @@
-output/
-# 运行时产物
+# 最终输出产物（统一输出到 downloads/）
 downloads/
 .cache/
+# 旧输出目录（已废弃，保留忽略）
 output/
 
 # Python 编译缓存与虚拟环境

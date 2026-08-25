@@ -41,15 +41,15 @@ python3 scripts/biligame_dialogue_crawler.py list "<索引页URL>"
 自动发现索引页下所有子任务页面，逐页抓取台词并合并为一个 JSONL 文件。
 
 ```bash
-python3 scripts/biligame_dialogue_crawler.py index "<索引页URL>" -o output.jsonl
+python3 scripts/biligame_dialogue_crawler.py index "<索引页URL>" -o downloads/任务名.jsonl
 ```
 
-同时生成 `output.meta.json`（含 sections、characters、source_url）。
+同时生成 `downloads/任务名.meta.json`（含 sections、characters、source_url）。
 
 #### 3. single —— 单页模式
 
 ```bash
-python3 scripts/biligame_dialogue_crawler.py single "<详情页URL>" -o output.jsonl
+python3 scripts/biligame_dialogue_crawler.py single "<详情页URL>" -o downloads/任务名.jsonl
 ```
 
 ## 典型工作流
@@ -58,7 +58,7 @@ python3 scripts/biligame_dialogue_crawler.py single "<详情页URL>" -o output.j
 2. **判断源站**：根据 URL 域名查路由表，未适配则告知用户暂不支持
 3. 先运行 `list` 模式，确认涉及多少个子任务页面
 4. 向用户报告页面数量和页面名，确认无误
-5. 运行 `index` 模式（或 `single` 若只有一页），输出 JSONL + meta.json
+5. 运行 `index` 模式（或 `single` 若只有一页），输出 JSONL + meta.json（统一输出到 `downloads/` 目录）
 6. 检查输出质量：行数、voiced 分布、超长行
 
 ## 源站结构要点（biligame wiki）

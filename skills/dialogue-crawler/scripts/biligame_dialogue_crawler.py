@@ -6,10 +6,10 @@
 
 用法:
   # 索引页模式：自动发现子任务页面，合并输出
-  python3 biligame_dialogue_crawler.py index <URL或页面名> -o output.jsonl
+  python3 biligame_dialogue_crawler.py index <URL或页面名> -o downloads/任务名.jsonl
 
   # 单页模式：直接解析一个详情页
-  python3 biligame_dialogue_crawler.py single <URL或页面名> -o output.jsonl
+  python3 biligame_dialogue_crawler.py single <URL或页面名> -o downloads/任务名.jsonl
 
   # 列出索引页涉及的子任务页面（不抓取台词）
   python3 biligame_dialogue_crawler.py list <URL或页面名>
