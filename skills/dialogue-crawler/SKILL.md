@@ -1,5 +1,5 @@
 ---
-name: dialogue-crawler
+name: game-storyline-dialogue-crawler
 description: >
   从游戏 wiki 采集剧情台词，解析 wikitext 并输出符合 mini-movie-maker 物料规范的 JSONL 台词文件。
   支持多源站路由：根据用户提供的 URL 域名自动判断源站，调用对应适配器脚本。
