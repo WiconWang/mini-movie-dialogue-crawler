@@ -27,11 +27,33 @@ API_BASE = "https://wiki.biligame.com/ys/api.php"
 
 # 旅行者相关名称 -- 无配音
 UNVOICED_SPEAKERS = {"旅行者", "空", "荧"}
+SENTENCE_PUNCT = "。！？；…"
 
 
 # ============================================================
 # API 层
 # ============================================================
+
+def _fetch_json_with_curl(url, fallback_error):
+    """WSL 直连 HTTPS 被重置时，用 Windows 侧 curl.exe 走宿主机网络。"""
+    import shutil
+    import subprocess
+
+    exe = shutil.which("curl.exe")
+    if not exe:
+        raise fallback_error
+    r = subprocess.run(
+        [exe, "-sS", "--max-time", "30", "-A", "Mozilla/5.0", url],
+        capture_output=True,
+    )
+    if r.returncode != 0:
+        detail = r.stderr.decode("utf-8", errors="replace")[-500:]
+        raise RuntimeError(f"curl.exe 获取失败: {detail}")
+    try:
+        return json.loads(r.stdout.decode("utf-8"))
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"curl.exe 响应解析失败: {e}") from e
+
 
 def fetch_wikitext(title_or_url):
     """通过 MediaWiki API 获取页面 wikitext，返回 (页面标题, wikitext)"""
@@ -56,10 +78,12 @@ def fetch_wikitext(title_or_url):
         "rvslots": "main",
     })
     url = f"{API_BASE}?{params}"
-    req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-
-    with urllib.request.urlopen(req, timeout=30) as resp:
-        data = json.loads(resp.read().decode("utf-8"))
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
+        with urllib.request.urlopen(req, timeout=30) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+    except Exception as urllib_err:
+        data = _fetch_json_with_curl(url, urllib_err)
 
     pages = data.get("query", {}).get("pages", {})
     for pid, page in pages.items():
@@ -146,29 +170,34 @@ def parse_speaker_line(content):
 def parse_options_block(block_text):
     """
     解析 {{剧情选项|选项1=...|剧情1=...}} 模板。
-    返回 [(speaker, text, voiced), ...]，按 选项1->剧情1->选项2->剧情2 顺序。
+    返回 [(speaker, text, voiced), ...]，保留 wikitext 原始行顺序。
+
+    逐行解析，避免 {{剧情选项}} 多行值与裸续行丢失：
+    - `|选项N=` / `|剧情N=` 值按台词行解析
+    - 块内 <br> 分隔的片段与裸续行按独立台词行解析
+    - 无说话人的完整句子保留为 (None, text, False)
+    - 无句末标点的 UI 标签（如“甜甜花”“罗莎莉亚”）丢弃
     """
     results = []
-    options = {}
-    plots = {}
-    for m in re.finditer(r"\|选项(\d+)=(.*?)(?=\||\}\}|\n)", block_text):
-        options[int(m.group(1))] = m.group(2).strip()
-    for m in re.finditer(r"\|剧情(\d+)=(.*?)(?=\||\}\}|\n)", block_text):
-        plots[int(m.group(1))] = m.group(2).strip()
-
-    max_n = max(list(options.keys()) + list(plots.keys()) + [0])
-    for n in range(1, max_n + 1):
-        if n in options:
-            parsed = parse_speaker_line(options[n])
+    for raw_line in block_text.split("\n"):
+        line = raw_line.strip()
+        if not line or line == "{{剧情选项" or line == "}}":
+            continue
+        if re.match(r"^\|(选项|剧情)\d+=", line):
+            value = re.sub(r"^\|(选项|剧情)\d+=", "", line).strip()
+        else:
+            value = line
+        for seg in re.split(r"<br\s*/?>", value):
+            seg = seg.strip()
+            if not seg:
+                continue
+            parsed = parse_speaker_line(seg)
             if parsed:
                 results.append(parsed)
-        if n in plots:
-            parsed = parse_speaker_line(plots[n])
-            if parsed:
-                results.append(parsed)
+            elif any(c in seg for c in SENTENCE_PUNCT):
+                results.append((None, seg, False))
 
     return results
-
 
 def split_sentences(text):
     """
