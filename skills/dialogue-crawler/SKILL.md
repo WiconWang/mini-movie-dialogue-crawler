@@ -41,10 +41,13 @@ python3 scripts/biligame_dialogue_crawler.py list "<索引页URL>"
 自动发现索引页下所有子任务页面，逐页抓取台词并合并为一个 JSONL 文件。
 
 ```bash
-python3 scripts/biligame_dialogue_crawler.py index "<索引页URL>" -o downloads/任务名.jsonl
+# 独立使用：-o downloads/任务名.jsonl
+# 集成进 game-storyline-pipeline 管线时，输出到统一工作区：
+python3 scripts/biligame_dialogue_crawler.py index "<索引页URL>" \
+    -o "$MMM_DATA_ROOT/genshin/dialogs/{版本}/{活动名}_{版本}_{章节}.jsonl"
 ```
 
-同时生成 `downloads/任务名.meta.json`（含 sections、characters、source_url）。
+同时生成同名 `.meta.json`（含 sections、characters、source_url）。
 
 #### 3. single —— 单页模式
 
@@ -58,7 +61,7 @@ python3 scripts/biligame_dialogue_crawler.py single "<详情页URL>" -o download
 2. **判断源站**：根据 URL 域名查路由表，未适配则告知用户暂不支持
 3. 先运行 `list` 模式，确认涉及多少个子任务页面
 4. 向用户报告页面数量和页面名，确认无误
-5. 运行 `index` 模式（或 `single` 若只有一页），输出 JSONL + meta.json（统一输出到 `downloads/` 目录）
+5. 运行 `index` 模式（或 `single` 若只有一页），输出 JSONL + meta.json（独立使用输出 `downloads/`，集成管线输出 `$MMM_DATA_ROOT/genshin/dialogs/{版本}/`）
 6. 检查输出质量：行数、voiced 分布、超长行
 
 ## 源站结构要点（biligame wiki）
