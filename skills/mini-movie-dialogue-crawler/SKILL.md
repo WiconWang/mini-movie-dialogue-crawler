@@ -1,5 +1,5 @@
 ---
-name: game-storyline-dialogue-crawler
+name: mini-movie-dialogue-crawler
 description: >
   从游戏 wiki 采集剧情台词，解析 wikitext 并输出符合 mini-movie-maker 物料规范的 JSONL 台词文件。
   支持多源站路由：根据用户提供的 URL 域名自动判断源站，调用对应适配器脚本。
@@ -7,7 +7,7 @@ description: >
   当用户需要：从 wiki 抓取剧情对话/台词、采集原神剧情文案、
   将 wiki 台词转为 JSONL、批量获取多个任务页面的对话内容时使用。
   触发词：biligame、wiki台词、剧情文案、对话采集、台词JSONL、原神台词、
-  采集剧情、抓取对话、任务页面、子任务页面、dialogue-crawler。
+  采集剧情、抓取对话、任务页面、子任务页面、mini-movie-dialogue-crawler。
 ---
 
 # 台词采集器
