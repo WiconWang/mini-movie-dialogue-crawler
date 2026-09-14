@@ -24,17 +24,35 @@ import urllib.parse
 import urllib.request
 
 API_BASE = "https://wiki.biligame.com/ys/api.php"
+WIKI_ORIGIN = "https://wiki.biligame.com"
+
+# biligame 的 WAF 对 API 请求强制校验 Referer：缺失即无条件返回 HTTP 567
+# （与「页面不存在」同码，极易误判）。UA 也需足够完整，否则同样被拦。
+USER_AGENT = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+              "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36")
 
 # 旅行者相关名称 -- 无配音
 UNVOICED_SPEAKERS = {"旅行者", "空", "荧"}
 SENTENCE_PUNCT = "。！？；…"
 
 
+def wiki_headers(title=""):
+    """构造能通过 biligame WAF 的请求头；Referer 缺失会被判 567。"""
+    referer = (f"{WIKI_ORIGIN}/ys/{urllib.parse.quote(title)}"
+               if title else f"{WIKI_ORIGIN}/ys/")
+    return {
+        "User-Agent": USER_AGENT,
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "zh-CN,zh;q=0.9",
+        "Referer": referer,
+    }
+
+
 # ============================================================
 # API 层
 # ============================================================
 
-def _fetch_json_with_curl(url, fallback_error):
+def _fetch_json_with_curl(url, fallback_error, title=""):
     """WSL 直连 HTTPS 被重置时，用 Windows 侧 curl.exe 走宿主机网络。"""
     import shutil
     import subprocess
@@ -42,8 +60,11 @@ def _fetch_json_with_curl(url, fallback_error):
     exe = shutil.which("curl.exe")
     if not exe:
         raise fallback_error
+    h = wiki_headers(title)
     r = subprocess.run(
-        [exe, "-sS", "--max-time", "30", "-A", "Mozilla/5.0", url],
+        [exe, "-sS", "--max-time", "30",
+         "-A", h["User-Agent"], "-e", h["Referer"],
+         "-H", f"Accept: {h['Accept']}", url],
         capture_output=True,
     )
     if r.returncode != 0:
@@ -53,6 +74,59 @@ def _fetch_json_with_curl(url, fallback_error):
         return json.loads(r.stdout.decode("utf-8"))
     except json.JSONDecodeError as e:
         raise RuntimeError(f"curl.exe 响应解析失败: {e}") from e
+
+
+FETCH_ATTEMPTS = 3           # wiki 反爬限流是偶发的，退避重试
+FETCH_BACKOFF = 1.5
+
+
+def describe_fetch_error(err, title):
+    """把 urllib 的裸异常翻译成可操作的提示（区分「页面不存在」与「被反爬拦截」）"""
+    code = getattr(err, "code", None)
+    reason = getattr(err, "reason", "")
+    page_url = f"https://wiki.biligame.com/ys/{urllib.parse.quote(title)}"
+    if code == 404:
+        return f"页面不存在: {title}（{page_url}）"
+    if code in (403, 429, 567):          # 567 = biligame WAF 拦截
+        return (f"wiki 拒绝访问（HTTP {code} {reason}）——这通常是反爬限流，"
+                f"**不代表页面不存在**。已重试 {FETCH_ATTEMPTS} 次仍失败；"
+                f"请稍后再试，或在浏览器打开确认页面名：{page_url}")
+    if code is not None:
+        return f"wiki 请求失败（HTTP {code} {reason}）: {page_url}"
+    return f"wiki 请求失败（{type(err).__name__}: {err}）: {page_url}"
+
+
+def _api_get(params, title=""):
+    """带 WAF 头 + 退避重试的 MediaWiki API GET，返回解析后的 JSON dict。"""
+    url = f"{API_BASE}?{urllib.parse.urlencode(params)}"
+
+    data = None
+    last_err = None
+    for attempt in range(FETCH_ATTEMPTS):
+        try:
+            req = urllib.request.Request(url, headers=wiki_headers(title))
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+            break
+        except json.JSONDecodeError as e:
+            last_err = e
+        except Exception as urllib_err:
+            last_err = urllib_err
+            code = getattr(urllib_err, "code", None)
+            # 4xx 里只有限流/被拦值得重试；404 之类重试无意义
+            if code is not None and 400 <= code < 500 and code not in (403, 429):
+                break
+            try:
+                data = _fetch_json_with_curl(url, urllib_err, title)   # WSL 直连被重置时走宿主机 curl.exe
+                break
+            except Exception:
+                pass
+        if attempt < FETCH_ATTEMPTS - 1:
+            time.sleep(FETCH_BACKOFF * (attempt + 1))
+
+    if data is None:
+        raise ValueError(describe_fetch_error(last_err, title))
+    return data
 
 
 def fetch_wikitext(title_or_url):
@@ -69,21 +143,14 @@ def fetch_wikitext(title_or_url):
 
     title = urllib.parse.unquote(title)
 
-    params = urllib.parse.urlencode({
+    data = _api_get({
         "action": "query",
         "format": "json",
         "prop": "revisions",
         "titles": title,
         "rvprop": "content",
         "rvslots": "main",
-    })
-    url = f"{API_BASE}?{params}"
-    try:
-        req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0"})
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-    except Exception as urllib_err:
-        data = _fetch_json_with_curl(url, urllib_err)
+    }, title)
 
     pages = data.get("query", {}).get("pages", {})
     for pid, page in pages.items():
@@ -95,6 +162,67 @@ def fetch_wikitext(title_or_url):
             return page.get("title", title), content
 
     raise ValueError(f"无法获取页面内容: {title}")
+
+
+# {{系列任务}} / {{多重系列任务}} 索引页的 |系列任务= 字段，用于判定从属关系
+SERIES_FIELD_RE = re.compile(r"\|\s*系列任务\s*=\s*([^\n|]*)")
+# 详情页用 {{任务}}；章节/总系列页用 {{系列任务}} 或 {{多重系列任务}}
+QUEST_TEMPLATE_RE = re.compile(r"\{\{\s*(多重系列任务|系列任务|任务)\s*[\n|]")
+
+
+def series_field(wikitext):
+    """取 |系列任务= 的值（已剔除 HTML 注释），无则返回空串"""
+    m = SERIES_FIELD_RE.search(wikitext or "")
+    if not m:
+        return ""
+    return re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S).strip()
+
+
+def discover_subpages_from_links(page_title):
+    """系列任务索引页（{{系列任务}}/{{多重系列任务}}）的原始 wikitext 不列子页面。
+
+    子页面只出现在**渲染后**的导航框里，所以改走 action=parse 的链接表拿候选，
+    再批量抓候选页 wikitext，用「{{任务}} 模板 + |系列任务= 含本页名」双重过滤，
+    避免把 NPC/道具/角色等噪音链接当成任务页。返回值保持导航框顺序。
+    """
+    if not page_title:
+        return []
+
+    data = _api_get({"action": "parse", "format": "json",
+                     "page": page_title, "prop": "links"}, page_title)
+    if "error" in data:
+        return []
+
+    cands = []
+    for link in data.get("parse", {}).get("links", []):
+        t = (link.get("*") or "").strip()
+        # 注意：API 的 "exists" 是**空字符串标记**而非布尔值，别用 link.get("exists") 判真假。
+        # 命名空间 0（主命名空间）+ 排除自身即可，噪音交给下面的 wikitext 二次过滤。
+        if not t or t == page_title or link.get("ns") != 0:
+            continue
+        cands.append(t)
+    if not cands:
+        return []
+
+    # 批量校验：一次请求最多 50 个 titles
+    ok = set()
+    for i in range(0, len(cands), 50):
+        chunk = cands[i:i + 50]
+        d = _api_get({"action": "query", "format": "json", "prop": "revisions",
+                      "titles": "|".join(chunk), "rvprop": "content",
+                      "rvslots": "main"}, page_title)
+        for page in (d.get("query", {}).get("pages") or {}).values():
+            if page.get("missing") is not None:
+                continue
+            revs = page.get("revisions") or []
+            if not revs:
+                continue
+            c = (revs[0].get("slots", {}).get("main", {}) or {}).get("*", "")
+            if QUEST_TEMPLATE_RE.search(c) and page_title in series_field(c):
+                ok.add(page.get("title"))
+        time.sleep(0.5)
+
+    return [t for t in cands if t in ok]
 
 
 def discover_subpages(wikitext):
@@ -187,6 +315,8 @@ def parse_options_block(block_text):
             value = re.sub(r"^\|(选项|剧情)\d+=", "", line).strip()
         else:
             value = line
+        # 模板值里常自带列表标记（|剧情1=*派蒙：…），不剥掉会污染 speaker 字段
+        value = re.sub(r"^\*+\s*", "", value)
         for seg in re.split(r"<br\s*/?>", value):
             seg = seg.strip()
             if not seg:
@@ -292,9 +422,9 @@ def parse_wikitext_dialogues(wikitext):
             i += 1
             continue
 
-        # 普通台词行 *说话人 : 台词
+        # 普通台词行 *说话人 : 台词（** 等多级列表标记一并剥掉）
         if line.startswith("*"):
-            parsed = parse_speaker_line(line[1:])
+            parsed = parse_speaker_line(line.lstrip("*"))
             if parsed:
                 speaker, text, voiced = parsed
                 text = clean_text(text)
@@ -351,7 +481,7 @@ def cmd_list(args):
     print(f"页面标题: {title}")
     print()
 
-    subpages = discover_subpages(wikitext)
+    subpages = discover_subpages(wikitext) or discover_subpages_from_links(title)
     if not subpages:
         print("未发现子任务页面。此页面可能本身即为详情页。")
         return
@@ -364,36 +494,51 @@ def cmd_list(args):
 
 
 def cmd_index(args):
-    """索引页模式：自动发现子页面，合并输出 JSONL"""
+    """索引页模式：自动发现子页面，合并输出 JSONL
+
+    递归下钻层级：系列任务总页 → 章节页 →（详情页），最多 2 层。
+    """
     print(f"获取索引页: {args.page}")
     title, wikitext = fetch_wikitext(args.page)
     print(f"页面标题: {title}")
 
-    subpages = discover_subpages(wikitext)
-    if not subpages:
-        print("未发现子任务页面，将当前页面作为详情页解析。")
-        subpages = [title]
+    all_entries, all_sections, source_urls = [], [], []
+    state = {"offset": 0, "n": 0}
 
-    print(f"共发现 {len(subpages)} 个子任务页面:\n")
-    all_entries = []
-    all_sections = []
-    source_urls = []
-    section_offset = 0
-
-    for idx, name in enumerate(subpages, 1):
-        print(f"  [{idx}/{len(subpages)}] {name}")
-        page_title, page_wikitext = fetch_wikitext(name)
+    def collect(page_title, page_wikitext, depth):
         entries, sections = parse_wikitext_dialogues(page_wikitext)
+        if entries:
+            for s in sections:
+                s["start_line"] += state["offset"]
+            all_entries.extend(entries)
+            all_sections.extend(sections)
+            state["offset"] += len(entries)
+            source_urls.append(f"{WIKI_ORIGIN}/ys/{urllib.parse.quote(page_title)}")
+            return len(entries)
 
-        for s in sections:
-            s["start_line"] += section_offset
+        if depth >= 2:          # 到底了仍无台词，多半是页面结构变了
+            return 0
 
-        all_entries.extend(entries)
-        all_sections.extend(sections)
-        section_offset += len(entries)
-        source_urls.append(f"https://wiki.biligame.com/ys/{urllib.parse.quote(name)}")
-        print(f"         -> {len(entries)} 行台词")
-        time.sleep(0.5)
+        subs = discover_subpages(page_wikitext) or discover_subpages_from_links(page_title)
+        if not subs:
+            return 0
+        total = 0
+        for sub in subs:
+            state["n"] += 1
+            print(f"  [{state['n']}] {sub}  （来自 {page_title}）")
+            sub_title, sub_wikitext = fetch_wikitext(sub)
+            got = collect(sub_title, sub_wikitext, depth + 1)
+            print(f"         -> {got} 行台词")
+            time.sleep(0.5)
+            total += got
+        return total
+
+    n = collect(title, wikitext, 0)
+    if n == 0:
+        print("未发现子任务页面，将当前页面作为详情页解析。")
+        state["n"] = 1
+        print(f"  [1] {title}")
+        n = collect(title, wikitext, 2)
 
     print(f"\n共 {len(all_entries)} 行台词")
 
