@@ -317,6 +317,12 @@ def parse_options_block(block_text):
             value = line
         # 模板值里常自带列表标记（|剧情1=*派蒙：…），不剥掉会污染 speaker 字段
         value = re.sub(r"^\*+\s*", "", value)
+        # 定义列表缩进标记（:: / :）不是说话人分隔符，不剥掉会被 ASCII 冒号规则误判为 speaker
+        value = re.sub(r"^:+\s*", "", value)
+        # 场景描述模板 {{颜色|描述|…}} 按输出规范硬性规则 5 丢弃，不作台词行
+        value = re.sub(r"\{\{颜色\|描述\|.*?\}\}", "", value, flags=re.S)
+        if not value.strip():
+            continue
         for seg in re.split(r"<br\s*/?>", value):
             seg = seg.strip()
             if not seg:
